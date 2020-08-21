@@ -1,5 +1,39 @@
 import itertools
+
+import numpy as np
 import pandas as pd
+from tqdm import tqdm
+
+
+class Itemset(set):
+
+    def __init__(self, iterable, occurrences=None):
+        super().__init__(iterable)
+        self.occurrences = occurrences
+
+    def __hash__(self):
+        return hash(tuple(sorted(self)))
+
+    def compute_occurrences(self, sdb):
+        iter_itemset = iter(self)
+        item = next(iter_itemset)
+        self.occurrences = {
+            i: (s.index(item), len(s) - s[::-1].index(item) - 1)
+            for i, s in enumerate(sdb)
+            if item in s
+        }
+        for item in iter_itemset:
+            self.occurrences = self.update_occurrences(item, sdb)
+
+    def update_occurrences(self, c, sdb):
+        return {
+            sid: (
+                min(first_occurrence, sdb[sid].index(c)),
+                max(last_occurrence, len(sdb[sid]) - sdb[sid][::-1].index(c) - 1)
+            )
+            for sid, (first_occurrence, last_occurrence) in self.occurrences.items()
+            if c in sdb[sid]
+        }
 
 
 class Rule:
@@ -9,174 +43,148 @@ class Rule:
         self.consequent = consequent
         self.support = None
         self.confidence = None
+        self.sequences_with_rule = None
 
     def __str__(self):
-        return '{} -> {}; sup: {}; conf: {}'.format(self.antecedent,
-                                                    self.consequent,
-                                                    self.support,
-                                                    self.confidence)
+        return '{} -> {}'.format(self.antecedent, self.consequent)
 
     def __hash__(self):
-        return hash(self.antecedent.__str__() + self.consequent.__str__())
+        return hash((self.antecedent, self.consequent))
 
-    def __eq__(self, other):
-        return self.antecedent == other.antecedent and self.consequent == other.consequent
+    def find_sequences_with_rule(self, sdb):
+        if self.antecedent.occurrences is None:
+            self.antecedent.compute_occurrences(sdb)
+        if self.consequent.occurrences is None:
+            self.consequent.compute_occurrences(sdb)
+        self.sequences_with_rule = [
+            k
+            for k, v in self.antecedent.occurrences.items()
+            if k in self.consequent.occurrences.keys() and v[0] < self.consequent.occurrences[k][1]
+        ]
 
-    def occurs(self, sequence):
-        return any(self.antecedent.occurs(sequence[:i]) and self.consequent.occurs(sequence[i:])
-                   for i in range(len(sequence)))
+    def compute_support(self, sdb):
+        if self.sequences_with_rule is None:
+            self.find_sequences_with_rule(sdb)
+        self.support = len(self.sequences_with_rule) / len(sdb)
 
-    def get_sup(self, sequences):
-        self.support = sum(self.occurs(s) for s in sequences) / len(sequences)
-        return self.support
+    def compute_confidence(self, sdb):
+        if self.support is None:
+            self.compute_support(sdb)
+        self.confidence = self.support * len(sdb) / len(self.antecedent.occurrences)
 
-    def get_conf(self, sequences):
-        self.confidence = sum(self.occurs(s) for s in sequences) / \
-                          sum(self.antecedent.occurs(s) for s in sequences)
-        return self.confidence
-
-    def is_frequent(self, sequences, minsup):
-        self.get_sup(sequences)
+    def is_frequent(self, sdb, minsup):
+        if self.support is None:
+            self.compute_support(sdb)
         return self.support >= minsup
 
-    def is_valid(self, sequences, minsup, minconf):
-        self.get_conf(sequences)
-        return self.is_frequent(sequences, minsup) and self.confidence >= minconf
-
-
-class Itemset:
-
-    def __init__(self, obj):
-        self.elements = obj
-
-    def __str__(self):
-        return self.elements.__str__()
-
-    def __hash__(self):
-        return hash(frozenset(self.elements))
-
-    def __eq__(self, other):
-        return frozenset(self.elements) == frozenset(other.elements)
-
-    def occurs(self, sequence):
-        return all(i in sequence for i in self.elements)
-
-    def size(self):
-        return len(self.elements)
-
-
-class RulesDatabase:
-
-    def __init__(self, rules):
-        self.rules = rules
-
-    def __add__(self, other):
-        self.rules.add(other)
-        return self
-
-    def left_equivalence(self, W, i=None):
-        if i:
-            return set([Rule(r.antecedent, r.consequent) for r in self.rules
-                        if W == r.antecedent and r.consequent.size() == i])
-        else:
-            return set([Rule(r.antecedent, r.consequent) for r in self.rules if W == r.antecedent])
-
-    def right_equivalence(self, W, i=None):
-        if i:
-            return set([Rule(r.antecedent, r.consequent) for r in self.rules
-                        if W == r.consequent and r.antecedent.size() == i])
-        else:
-            return set([Rule(r.antecedent, r.consequent) for r in self.rules if W == r.consequent])
-
-    def equivalence_classes(self, i=None, j=None):
-        LE_classes = {a: self.left_equivalence(a, i) for a in {r.antecedent for r in self.rules}}
-        RE_classes = {c: self.right_equivalence(c, j) for c in {r.consequent for r in self.rules}}
-        return LE_classes, RE_classes
+    def is_valid(self, sdb, minsup, minconf):
+        if not self.is_frequent(sdb, minsup):
+            return False
+        if self.confidence is None:
+            self.compute_confidence(sdb)
+        return self.confidence >= minconf
 
 
 class ERMiner:
 
     @staticmethod
-    def cooccurs(a, b, sequences):
-        return sum(a in s and b in s for s in sequences) / len(sequences)
+    def cooccurs(a, b, sdb):
+        return sum(a in s and b in s for s in sdb) / len(sdb)
 
     def __init__(self, minsup, minconf, single_consequent=False):
         self.minsup = minsup
         self.minconf = minconf
         self.single_consequent = single_consequent
-        self.left_store = set()
-        self.rules = None
-        self.SCM = None
+        self._left_store = dict()
+        self.valid_rules = None
+        self._SCM = None
 
-    def _first_scan(self, SBD):
-        itemset = {i for s in SBD for i in s}
-        self.SCM = {frozenset({a, b}): self.cooccurs(a, b, SBD)
-                    for a, b in itertools.combinations(itemset, 2)}
-        rules11 = {Rule(Itemset([a]), Itemset([c])) for a in itemset for c in itemset}
-        frequent_rules = RulesDatabase({r for r in rules11 if r.is_frequent(SBD, self.minsup)})
-        self.rules = RulesDatabase({r for r in frequent_rules.rules
-                                    if r.is_valid(SBD, self.minsup, self.minconf)})
-        return frequent_rules.equivalence_classes(1, 1)
+    def _find_left_equivalence_classes(self, i, rules, sdb):
+        return {
+            W: {rule for rule in rules if rule.antecedent == W and len(rule.consequent) == i}
+            for W in {rule.antecedent for rule in rules if rule.is_frequent(sdb, self.minsup)}
+        }
 
-    def _left_search(self, LE, SBD):
-        LE1 = LE[0], set()
-        for r, s in itertools.combinations(LE[1], 2):
-            c = list({*r.consequent.elements} - {*s.consequent.elements})[0]
-            d = list({*s.consequent.elements} - {*r.consequent.elements})[0]
-            if self.SCM[frozenset({c, d})] >= self.minsup and \
-                    r.consequent.elements[:-1] == s.consequent.elements[:-1]:
-                t = Rule(LE[0], Itemset(list({*r.consequent.elements, *s.consequent.elements})))
-                t.get_sup(SBD)
-                if t.support >= self.minsup:
-                    t.get_conf(SBD)
-                    if t.confidence >= self.minconf:
-                        self.rules += t
-                    LE1[1].add(t)
-        if LE1[1]:
-            self._left_search(LE1, SBD)
+    def _find_right_equivalence_classes(self, i, rules, sdb):
+        return {
+            W: {rule for rule in rules if rule.consequent == W and len(rule.antecedent) == i}
+            for W in {rule.consequent for rule in rules if rule.is_frequent(sdb, self.minsup)}
+        }
 
-    def _right_search(self, RE, SBD, left_store):
-        RE1 = RE[0], set()
-        for r, s in itertools.combinations(RE[1], 2):
-            c = list({*r.antecedent.elements} - {*s.antecedent.elements})[0]
-            d = list({*s.antecedent.elements} - {*r.antecedent.elements})[0]
-            if self.SCM[frozenset({c, d})] >= self.minsup and \
-                    r.antecedent.elements[:-1] == s.antecedent.elements[:-1]:
-                t = Rule(Itemset(list({*r.antecedent.elements, *s.antecedent.elements})), RE[0])
-                t.get_sup(SBD)
-                if t.support >= self.minsup:
-                    t.get_conf(SBD)
-                    if t.confidence >= self.minconf:
-                        self.rules += t
-                    RE1[1].add(t)
-                    self.left_store.add(t)
-        if RE1[1]:
-            self._right_search(RE1, SBD, left_store)
+    def _first_scan(self, sdb):
+        itemset = {i for s in sdb for i in s}
+        self._SCM = {
+            tuple(sorted((a, b))): self.cooccurs(a, b, sdb)
+            for a, b in itertools.combinations(itemset, 2)
+        }
+        rules11 = {
+            Rule(Itemset([a]), Itemset([c])) for a, c in itertools.product(itemset, repeat=2)
+        }
+        frequent_rules11 = {r for r in tqdm(rules11) if r.is_frequent(sdb, self.minsup)}
+        self.valid_rules = {
+            r for r in frequent_rules11 if r.is_valid(sdb, self.minsup, self.minconf)
+        }
+        leq = self._find_left_equivalence_classes(1, frequent_rules11, sdb)
+        req = self._find_right_equivalence_classes(1, frequent_rules11, sdb)
+        return leq, req
 
-    def fit(self, SBD):
-        lEQ, rEQ = self._first_scan(SBD)
+    def _left_search(self, leq, sdb):
+        leq1 = set()
+        for r, s in itertools.combinations(leq, 2):
+            yr = sorted(r.consequent)
+            ys = sorted(s.consequent)
+            if yr[:-1] == ys[:-1]:
+                c = yr[-1]
+                d = ys[-1]
+                if self._SCM[tuple(sorted({c, d}))] >= self.minsup:
+                    yrud = Itemset(yr + [d], r.consequent.update_occurrences(d, sdb))
+                    t = Rule(r.antecedent, yrud)
+                    if t.is_frequent(sdb, self.minsup):
+                        leq1.add(t)
+                        if t.is_valid(sdb, self.minsup, self.minconf):
+                            self.valid_rules.add(t)
+        if leq1:
+            self._left_search(leq1, sdb)
+
+    def _right_search(self, req, sdb):
+        req1 = set()
+        for r, s in itertools.combinations(req, 2):
+            xr = sorted(r.antecedent)
+            xs = sorted(s.antecedent)
+            if xr[:-1] == xs[:-1]:
+                c = xr[-1]
+                d = xs[-1]
+                if self._SCM[tuple(sorted({c, d}))] >= self.minsup:
+                    xrud = Itemset(xr + [d], r.antecedent.update_occurrences(d, sdb))
+                    t = Rule(xrud, r.consequent)
+                    if t.is_frequent(sdb, self.minsup):
+                        req1.add(t)
+                        if t.antecedent not in self._left_store:
+                            self._left_store[t.antecedent] = set()
+                        self._left_store[t.antecedent].add(t)
+                        if t.is_valid(sdb, self.minsup, self.minconf):
+                            self.valid_rules.add(t)
+        if req1:
+            self._right_search(req1, sdb)
+
+    def fit(self, sdb):
+        leq, req = self._first_scan(sdb)
         if not self.single_consequent:
-            for H in lEQ.items():
-                self._left_search(H, SBD)
-        for J in rEQ.items():
-            self._right_search(J, SBD, self.left_store)
+            for H in tqdm(leq.values()):
+                self._left_search(H, sdb)
+        for J in tqdm(req.values()):
+            self._right_search(J, sdb)
         if not self.single_consequent:
-            self.left_store = RulesDatabase(self.left_store)
-            self.left_store, _ = self.left_store.equivalence_classes()
-            for K in self.left_store.items():
-                self._left_search(K, SBD)
-        return self.rules
+            for K in tqdm(self._left_store.values()):
+                self._left_search(K, sdb)
 
     def rules_to_df(self, csv_file):
-        l = []
-        for r in self.rules.rules:
-            l.append([r.antecedent,
-                      r.consequent,
-                      r.support,
-                      r.confidence])
-        df = pd.DataFrame(l, columns=['antecedent',
-                                      'consequent',
-                                      'support',
-                                      'confidence'])
+        df = pd.DataFrame(
+            [
+                [list(r.antecedent), list(r.consequent), r.support, r.confidence]
+                for r in self.valid_rules
+            ],
+            columns=['antecedent', 'consequent', 'support', 'confidence']
+        )
         df = df.sort_values(by=['confidence', 'support'], ascending=False)
-        df.to_csv(csv_file)
+        df.to_csv(csv_file, index=False)
