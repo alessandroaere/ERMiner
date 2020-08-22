@@ -1,7 +1,7 @@
-from core.sequential_pattern_mining import ERMiner
+from sequential_pattern_mining import ERMiner
 import argparse
 import os
-from core.config import DEFAULT_PARAMS
+from config import DEFAULT_PARAMS
 
 
 parser = argparse.ArgumentParser()
@@ -15,12 +15,14 @@ if __name__ == '__main__':
 
     with open(args.datapath, 'r') as f:
         data = f.read()
-    data = data.split(args.sequencesep)[:10]
+    data = data.split(args.sequencesep)
     data = [s.split(args.itemsep) for s in data]
+    data = [[int(i) for i in s] for s in data[:-1]]
 
     model = ERMiner(minsup=DEFAULT_PARAMS['minsup'],
                     minconf=DEFAULT_PARAMS['minconf'],
-                    single_consequent=True)
+                    single_consequent=False)
 
     model.fit(data)
+    print("{} valid rules found.".format(len(model.valid_rules)))
     model.rules_to_df(args.outpath)
