@@ -2,7 +2,7 @@ import itertools
 
 import pandas as pd
 from tqdm import tqdm
-from typing import Sequence, Dict
+from typing import Sequence, Dict, Set
 
 from .itemset import Itemset
 from .rule import Rule
@@ -24,7 +24,7 @@ class ERMiner:
 
     def _find_left_equivalence_classes(self,
                                        i: int,
-                                       rules: Sequence[Rule],
+                                       rules: Set[Rule],
                                        sdb: Sequence[Sequence]) -> Dict[Itemset, Sequence[Rule]]:
         return {
             W: {rule for rule in rules if rule.antecedent == W and len(rule.consequent) == i}
