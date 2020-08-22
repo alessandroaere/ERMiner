@@ -1,8 +1,8 @@
 import itertools
+from typing import Sequence, Dict, Set, Tuple
 
 import pandas as pd
 from tqdm import tqdm
-from typing import Sequence, Dict, Set
 
 from .itemset import Itemset
 from .rule import Rule
@@ -25,19 +25,24 @@ class ERMiner:
     def _find_left_equivalence_classes(self,
                                        i: int,
                                        rules: Set[Rule],
-                                       sdb: Sequence[Sequence]) -> Dict[Itemset, Sequence[Rule]]:
+                                       sdb: Sequence[Sequence]) -> Dict[Itemset, Set[Rule]]:
         return {
             W: {rule for rule in rules if rule.antecedent == W and len(rule.consequent) == i}
             for W in {rule.antecedent for rule in rules if rule.is_frequent(sdb, self.minsup)}
         }
 
-    def _find_right_equivalence_classes(self, i, rules, sdb):
+    def _find_right_equivalence_classes(self,
+                                        i: int,
+                                        rules: Set[Rule],
+                                        sdb: Sequence[Sequence]) -> Dict[Itemset, Set[Rule]]:
         return {
             W: {rule for rule in rules if rule.consequent == W and len(rule.antecedent) == i}
             for W in {rule.consequent for rule in rules if rule.is_frequent(sdb, self.minsup)}
         }
 
-    def _first_scan(self, sdb):
+    def _first_scan(self,
+                    sdb: Sequence[Sequence],
+                    ) -> Tuple[Dict[Itemset, Set[Rule]], Dict[Itemset, Set[Rule]]]:
         itemset = {i for s in sdb for i in s}
         self._SCM = {
             tuple(sorted((a, b))): self.cooccurs(a, b, sdb)
@@ -54,7 +59,7 @@ class ERMiner:
         req = self._find_right_equivalence_classes(1, frequent_rules11, sdb)
         return leq, req
 
-    def _left_search(self, leq, sdb):
+    def _left_search(self, leq: Set[Rule], sdb: Sequence[Sequence]) -> None:
         leq1 = set()
         for r, s in itertools.combinations(leq, 2):
             yr = sorted(r.consequent)
@@ -72,7 +77,7 @@ class ERMiner:
         if leq1:
             self._left_search(leq1, sdb)
 
-    def _right_search(self, req, sdb):
+    def _right_search(self, req: Set[Rule], sdb: Sequence[Sequence]) -> None:
         req1 = set()
         for r, s in itertools.combinations(req, 2):
             xr = sorted(r.antecedent)
@@ -93,7 +98,7 @@ class ERMiner:
         if req1:
             self._right_search(req1, sdb)
 
-    def fit(self, sdb):
+    def fit(self, sdb: Sequence[Sequence]) -> None:
         leq, req = self._first_scan(sdb)
         if not self.single_consequent:
             for H in tqdm(leq.values()):
@@ -104,7 +109,7 @@ class ERMiner:
             for K in tqdm(self._left_store.values()):
                 self._left_search(K, sdb)
 
-    def rules_to_df(self, csv_file):
+    def rules_to_df(self, csv_file: str) -> None:
         df = pd.DataFrame(
             [
                 [list(r.antecedent), list(r.consequent), r.support, r.confidence]

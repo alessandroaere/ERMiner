@@ -1,13 +1,16 @@
+from typing import Sequence, Dict, Tuple
+
+
 class Itemset(set):
 
-    def __init__(self, iterable, occurrences=None):
+    def __init__(self, iterable: Sequence, occurrences: Dict[int, Tuple[int, int]] = None):
         super().__init__(iterable)
         self.occurrences = occurrences
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(tuple(sorted(self)))
 
-    def compute_occurrences(self, sdb):
+    def compute_occurrences(self, sdb: Sequence[Sequence]) -> None:
         iter_itemset = iter(self)
         item = next(iter_itemset)
         self.occurrences = {
@@ -18,7 +21,7 @@ class Itemset(set):
         for item in iter_itemset:
             self.occurrences = self.update_occurrences(item, sdb)
 
-    def update_occurrences(self, c, sdb):
+    def update_occurrences(self, c: int, sdb: Sequence[Sequence]) -> Dict[int, Tuple[int, int]]:
         return {
             sid: (
                 max(first_occurrence, sdb[sid].index(c)),
