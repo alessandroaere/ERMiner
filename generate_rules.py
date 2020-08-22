@@ -1,7 +1,7 @@
-from core.sequential_pattern_mining import ERMiner
+from sequential_pattern_mining import ERMiner
 import argparse
 import os
-from core.config import DEFAULT_PARAMS
+from config import DEFAULT_PARAMS
 
 
 parser = argparse.ArgumentParser()

@@ -1,97 +1,20 @@
 import itertools
 
-import numpy as np
 import pandas as pd
 from tqdm import tqdm
+from typing import Sequence, Dict
 
-
-class Itemset(set):
-
-    def __init__(self, iterable, occurrences=None):
-        super().__init__(iterable)
-        self.occurrences = occurrences
-
-    def __hash__(self):
-        return hash(tuple(sorted(self)))
-
-    def compute_occurrences(self, sdb):
-        iter_itemset = iter(self)
-        item = next(iter_itemset)
-        self.occurrences = {
-            i: (s.index(item), len(s) - s[::-1].index(item) - 1)
-            for i, s in enumerate(sdb)
-            if item in s
-        }
-        for item in iter_itemset:
-            self.occurrences = self.update_occurrences(item, sdb)
-
-    def update_occurrences(self, c, sdb):
-        return {
-            sid: (
-                min(first_occurrence, sdb[sid].index(c)),
-                max(last_occurrence, len(sdb[sid]) - sdb[sid][::-1].index(c) - 1)
-            )
-            for sid, (first_occurrence, last_occurrence) in self.occurrences.items()
-            if c in sdb[sid]
-        }
-
-
-class Rule:
-
-    def __init__(self, antecedent, consequent):
-        self.antecedent = antecedent
-        self.consequent = consequent
-        self.support = None
-        self.confidence = None
-        self.sequences_with_rule = None
-
-    def __str__(self):
-        return '{} -> {}'.format(self.antecedent, self.consequent)
-
-    def __hash__(self):
-        return hash((self.antecedent, self.consequent))
-
-    def find_sequences_with_rule(self, sdb):
-        if self.antecedent.occurrences is None:
-            self.antecedent.compute_occurrences(sdb)
-        if self.consequent.occurrences is None:
-            self.consequent.compute_occurrences(sdb)
-        self.sequences_with_rule = [
-            k
-            for k, v in self.antecedent.occurrences.items()
-            if k in self.consequent.occurrences.keys() and v[0] < self.consequent.occurrences[k][1]
-        ]
-
-    def compute_support(self, sdb):
-        if self.sequences_with_rule is None:
-            self.find_sequences_with_rule(sdb)
-        self.support = len(self.sequences_with_rule) / len(sdb)
-
-    def compute_confidence(self, sdb):
-        if self.support is None:
-            self.compute_support(sdb)
-        self.confidence = self.support * len(sdb) / len(self.antecedent.occurrences)
-
-    def is_frequent(self, sdb, minsup):
-        if self.support is None:
-            self.compute_support(sdb)
-        return self.support >= minsup
-
-    def is_valid(self, sdb, minsup, minconf):
-        if not self.is_frequent(sdb, minsup):
-            return False
-        if self.confidence is None:
-            self.compute_confidence(sdb)
-        return self.confidence >= minconf
+from .itemset import Itemset
+from .rule import Rule
 
 
 class ERMiner:
 
     @staticmethod
-    def cooccurs(a, b, sdb):
+    def cooccurs(a: Itemset, b: Itemset, sdb: Sequence[Sequence]) -> float:
         return sum(a in s and b in s for s in sdb) / len(sdb)
 
-    def __init__(self, minsup, minconf, single_consequent=False):
+    def __init__(self, minsup: float, minconf: float, single_consequent: bool = False):
         self.minsup = minsup
         self.minconf = minconf
         self.single_consequent = single_consequent
@@ -99,7 +22,10 @@ class ERMiner:
         self.valid_rules = None
         self._SCM = None
 
-    def _find_left_equivalence_classes(self, i, rules, sdb):
+    def _find_left_equivalence_classes(self,
+                                       i: int,
+                                       rules: Sequence[Rule],
+                                       sdb: Sequence[Sequence]) -> Dict[Itemset, Sequence[Rule]]:
         return {
             W: {rule for rule in rules if rule.antecedent == W and len(rule.consequent) == i}
             for W in {rule.antecedent for rule in rules if rule.is_frequent(sdb, self.minsup)}
